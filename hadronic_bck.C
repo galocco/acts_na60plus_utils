@@ -1,9 +1,14 @@
+
 #include <cmath>
 #include <iostream>
 #include <string>
 #include <bitset>
 #include <TF1.h>
 #include <TRandom.h>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
 
 TF1 *fdNdYPi, *fdNdYK, *fdNdYP, *fdNdPtPi, *fdNdPtK, *fdNdPtP;
 Double_t fNChPi, fNChK, fNChP;
@@ -15,7 +20,7 @@ void InitBgGenerationPart(double, double, double, double, double,
                           double, double, double, double,
                           double, double,
                           double, double, double, double, double);
-void GenBgEvent(double, double, double);
+void GenBgEvent(double, double, double, int);
 
 const Double_t kMassP = 0.938;
 const Double_t kMassK = 0.4937;
@@ -26,7 +31,6 @@ const Double_t kMassE = 0.0005;
 void hadronic_bck(int nev, double beamSigma = 0, bool fullTargetSystem = false)
 {
 
-  long int particleNumber = 4503599644147712;
   // (1) 40 GeV pi K PRC66 (2002)054902
   // (2) 40 GeV p PRC83 (2011) 014901
   double y0BG = 2.22;  // gaussian y mean - 40 GeV
@@ -56,6 +60,19 @@ void hadronic_bck(int nev, double beamSigma = 0, bool fullTargetSystem = false)
 
   InitBgGenerationPart(NBGPi, NBGKplus, NBGKminus, NBGP, Piratio, y0BG, y0BGPi, y0BGKplus, y0BGKminus, y0BGP, sigyBGPi, sigyBGKplus, sigyBGKminus, sigyBGP, yminBG, ymaxBG, TBGpi, TBGK, TBGP, ptminBG, ptmaxBG);
 
+  std::string directoryName = "events_40GeV";
+
+  if (!fs::exists(directoryName)) { // Check if directory doesn't exist
+      bool created = fs::create_directory(directoryName); // Create the directory
+      if (created) {
+          std::cout << "Directory created successfully: " << directoryName << std::endl;
+      } else {
+          std::cerr << "Failed to create directory: " << directoryName << std::endl;
+          return; // Return error code
+      }
+  } else {
+      std::cout << "Directory already exists: " << directoryName << std::endl;
+  }
   printf("pion   multiplicity in %f<y<%f = %f\n", yminBG, ymaxBG, fNChPi);
   printf("kaon   multiplicity in %f<y<%f = %f\n", yminBG, ymaxBG, fNChK);
   printf("proton multiplicity in %f<y<%f = %f\n", yminBG, ymaxBG, fNChP);
@@ -74,8 +91,9 @@ void hadronic_bck(int nev, double beamSigma = 0, bool fullTargetSystem = false)
         eventNumber /= 10;
         nzeros--;
     }
-
-    std::string eventFile = "event" + std::string(nzeros, '0') + std::to_string(eventNumber) + "-particles.csv";
+    if(i==0) nzeros = 8;
+    
+    std::string eventFile = "events_40GeV/event" + std::string(nzeros, '0') + std::to_string(static_cast<int>(i)) + "-particles.csv";
     sprintf(csvname, eventFile.c_str(), i);
     fpcsv = fopen(csvname, "w");
 
@@ -101,7 +119,7 @@ void hadronic_bck(int nev, double beamSigma = 0, bool fullTargetSystem = false)
         }
       }
     }
-    GenBgEvent(vX, vY, vZ);
+    GenBgEvent(vX, vY, vZ, i);
 
     fclose(fpcsv);
   }
@@ -134,7 +152,7 @@ void InitBgGenerationPart(double NPi, double NKplus, double NKminus, double NP, 
   fdNdPtP->SetParameter(0, TP);
 }
 
-void GenBgEvent(double x, double y, double z)
+void GenBgEvent(double x, double y, double z, int event)
 {
 
   if (fNChPi < 0 && fNChK < 0 && fNChP < 0)
@@ -178,7 +196,7 @@ void GenBgEvent(double x, double y, double z)
     */
     //auto  = 
 
-    std::string binaryString = "1" + std::string(12, '0') + std::bitset<16>(particleNumber++).to_string() + std::string(24, '0');
+    std::string binaryString = std::bitset<12>(event+1).to_string() + std::string(12, '0') + std::bitset<16>(particleNumber++).to_string() + std::string(24, '0');
     unsigned long long barcode = std::stoull(binaryString, nullptr, 2);
     fprintf(fpcsv, "%llu,%d,%d,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", barcode, ptypecsv, 0, x, y, z, 0., pxyz[0], pxyz[1], pxyz[2], masscsv, charge);
   }
@@ -195,7 +213,7 @@ void GenBgEvent(double x, double y, double z)
     double masscsv = 0.493677;
     double pxyz[3] = {pt * TMath::Cos(phi), pt * TMath::Sin(phi), TMath::Sqrt(pt * pt + kMassK * kMassK) * TMath::SinH(yrap)};
 
-    std::string binaryString = "1" + std::string(12, '0') + std::bitset<16>(particleNumber++).to_string() + std::string(24, '0');
+    std::string binaryString = std::bitset<12>(event+1).to_string() + std::string(12, '0') + std::bitset<16>(particleNumber++).to_string() + std::string(24, '0');
     unsigned long long barcode = std::stoull(binaryString, nullptr, 2);
     fprintf(fpcsv, "%llu,%d,%d,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", barcode, ptypecsv, 0, x, y, z, 0., pxyz[0], pxyz[1], pxyz[2], masscsv, charge);
   }
@@ -211,7 +229,7 @@ void GenBgEvent(double x, double y, double z)
     int ptypecsv = 2212;
     double masscsv = 0.938272119;
     double pxyz[3] = {pt * TMath::Cos(phi), pt * TMath::Sin(phi), TMath::Sqrt(pt * pt + kMassP * kMassP) * TMath::SinH(yrap)};
-    std::string binaryString = "1" + std::string(12, '0') + std::bitset<16>(particleNumber++).to_string() + std::string(24, '0');
+    std::string binaryString = std::bitset<12>(event+1).to_string() + std::string(12, '0') + std::bitset<16>(particleNumber++).to_string() + std::string(24, '0');
     unsigned long long barcode = std::stoull(binaryString, nullptr, 2);
     fprintf(fpcsv, "%llu,%d,%d,%f,%f,%f,%f,%f,%f,%f,%f,%f\n", barcode, ptypecsv, 0, x, y, z, 0., pxyz[0], pxyz[1], pxyz[2], masscsv, charge);
   }
