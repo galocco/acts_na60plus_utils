@@ -44,9 +44,12 @@ from acts.examples.reconstruction import (
     AmbiguityResolutionConfig,
     addVertexFitting,
     VertexFinder,
+    CkfConfig,
     TruthEstimatedSeedingAlgorithmConfigArg,
 )
 from acts.examples import TGeoDetector
+
+
 
 
 def getArgumentParser():
@@ -65,11 +68,40 @@ def getArgumentParser():
         "--output",
         dest="outdir",
         help="Output directory for new ntuples",
-        default="./",
+        default=None,
     )
     parser.add_argument(
         "-n", "--nEvents", dest="nEvts", help="Number of events to run over", default=1, type=int
     )
+
+    parser.add_argument(
+        '-g',
+        '--geant4',
+        help='Use Geant4',
+        action='store_true'
+    )
+    
+    parser.add_argument(
+        '-d',
+        '--dead',
+        help='Apply dead zones',
+        action='store_true'
+    )
+    parser.add_argument(
+        '-f',
+        '--fast',
+        help='Apply fast sim selections',
+        action='store_true'
+    )
+
+    parser.add_argument(
+        '-p',
+        '--gun',
+        help='Use particle gun',
+        type=int,
+        default=0,
+    )
+
     parser.add_argument(
         '-s',
         '--truthSeeding',
@@ -149,19 +181,24 @@ def getArgumentParser():
 
 
 def runCKFTracks(
+    detector,
     trackingGeometry,
     inputDir: Path,
     outputDir: Path,
+    useGeant4=False,
     truthSeeding=False,
     truthSmeared=False,
     truthVertexing=False,
+    applyDeadZones=False,
+    applyFastSimSelections=False,
+    particleGun=0,
     NumEvents=1,
     MaxSeedsPerSpM=3,
     CotThetaMax=5.809222379141632,
     SigmaScattering=7.293572849910582,
     RadLengthPerSeed=0.07827007716884793,
     ImpactMax=10.47494916604592,
-    # MaxPtScattering=10.0,
+    MaxPtScattering=10.0
     # DeltaRMin=1.0,
     # DeltaRMax=60.0,
 ):
@@ -180,34 +217,74 @@ def runCKFTracks(
         trackFpes=False,
     )
 
-    addParticleReader(
-        s,
-        inputDir=inputDir,
-        outputDirRoot=outputDir,
-    )
+    if particleGun >0:
+        addParticleGun(
+            s,
+            MomentumConfig(0 * u.GeV, 100* u.GeV, transverse=False),
+            EtaConfig(0,5.2, uniform=True),
+            ParticleConfig(1, acts.PdgParticle.eMuon, randomizeCharge=True),
+            multiplicity=particleGun,
+            vtxGen=acts.examples.GaussianVertexGenerator(
+            stddev=acts.Vector4(0.0 * u.mm, 0.0 * u.mm, 0.0 * u.mm, 0 * u.ns),
+            mean=acts.Vector4(0, 0, 0, 0),
+            ),
 
-    addFatras(
-        s,
-        trackingGeometry,
-        field,
-        rnd,
-        preSelectParticles=ParticleSelectorConfig(
-            eta=(None, None),
-            pt=(100 * u.MeV, None),
-            removeNeutral=True,
-        ),
-        outputDirRoot=outputDir,
-        # logLevel=acts.logging.DEBUG,
-    )
+            rnd=rnd,
+            outputDirRoot=outputDir,
+        )
+    else:
+        addParticleReader(
+            s,
+            inputDir=inputDir,
+            outputDirRoot=outputDir,
+        )
+    
+
+    if useGeant4:
+        addGeant4(
+                    s,
+                    detector,
+                    trackingGeometry,
+                    field,
+                    rnd,
+                    #g4DetectorConstructionFactory: Optional[Any] = None,
+                    #volumeMappings: List[str] = [],
+                    #materialMappings: List[str] = [],
+                    preSelectParticles=ParticleSelectorConfig(
+                        eta=(None, None),
+                        pt=(1000 * u.MeV, None),
+                        removeNeutral=True,
+                    ),
+                    #recordHitsOfSecondaries=True,
+                    #keepParticlesWithoutHits=True,
+                    outputDirRoot=outputDir,
+                    killVolume=trackingGeometry.worldVolume,
+                    killAfterTime=25 * u.ns,
+                )
+    else:
+        addFatras(
+            s,
+            trackingGeometry,
+            field,
+            rnd,
+            preSelectParticles=ParticleSelectorConfig(
+                eta=(None, None),
+                pt=(100 * u.MeV, None),
+                removeNeutral=True,
+            ),
+            outputDirRoot=outputDir,
+            # logLevel=acts.logging.DEBUG,
+        )
 
     addDigitization(
         s,
         trackingGeometry,
         field,
-        digiConfigFile="digismear.json",
+        digiConfigFile="geomVTNA60p/digismear.json",
         outputDirRoot=outputDir,
-        efficiency=1,
-        applyDeadAreas=False,
+        efficiency=0.99 if applyDeadZones or applyFastSimSelections else 1,
+        applyDeadAreas=applyDeadZones,
+        applyFastSimSelections=applyFastSimSelections,
         rnd=rnd,
     )
 
@@ -222,22 +299,22 @@ def runCKFTracks(
         TruthSeedRanges(pt=(100 * u.MeV, None),
                         eta=(None, None), nHits=(4, None)),
         SeedFinderConfigArg(
-            maxSeedsPerSpM=MaxSeedsPerSpM,  # TUNING
-            cotThetaMax=CotThetaMax,  # vas 0.1  ####TUNING
-            deltaZMax=50,  # was 5
-            sigmaScattering=SigmaScattering,  # TUNING
-            radLengthPerSeed=RadLengthPerSeed,  # TUNING
-            minPt=100 * u.MeV,
-            impactMax=ImpactMax * u.mm,  # was 0.1 0.15 //very impactful cut
-            # maxPtScattering=MaxPtScattering,  ####TUNING
-            interactionPointCut=True,
-            useVariableMiddleSPRange=False,  # MODIFICATO 22/5/23
-            # not useful if useVariableMiddleSPRange=False
-            deltaRMiddleSPRange=(0 * u.mm, 0 * u.mm),
+            maxSeedsPerSpM=MaxSeedsPerSpM,
+            cotThetaMax=CotThetaMax,
+            sigmaScattering=SigmaScattering,
+            radLengthPerSeed=RadLengthPerSeed,
+            maxPtScattering=MaxPtScattering,
             # min and max R between Middle and Top SP
             deltaRTopSP=(45 * u.mm, 100 * u.mm),
             # min and max R between Middle and Bottom SP
             deltaRBottomSP=(50 * u.mm, 100 * u.mm),
+            impactMax=ImpactMax * u.mm,
+            deltaZMax=50,  # was 5
+            minPt=100 * u.MeV,
+            interactionPointCut=True,
+            useVariableMiddleSPRange=False,  # MODIFICATO 22/5/23
+            # not useful if useVariableMiddleSPRange=False
+            deltaRMiddleSPRange=(0 * u.mm, 0 * u.mm),
             collisionRegion=(-0.5 * u.mm, 0.5 * u.mm),  # 0.5
             # NOT USED??? seems to be used in Orthogonal seeding
             r=(0 * u.mm, 400 * u.mm),
@@ -282,39 +359,37 @@ def runCKFTracks(
         SeedingAlgorithmConfigArg(
             zBinNeighborsTop=[[0, 1], [-1, 1], [-1, 0]],
             zBinNeighborsBottom=[[0, 1], [-1, 1], [-1, 0]],
-            # zBinNeighborsTop=[[0,1],[0,1],[0,1],[0,1]],
-            # zBinNeighborsBottom=[[-1,0],[-1,0],[-1,0],[-1,0]],
-            # zBinNeighborsTop=[[0,1],[0,1]],
-            # zBinNeighborsBottom=[[-1,0],[-1,0]],
             numPhiNeighbors=1,
         ),
-        #
-        TruthEstimatedSeedingAlgorithmConfigArg(deltaR=(None, None)),
+        TruthEstimatedSeedingAlgorithmConfigArg(deltaR=(0 * u.mm, 100000 * u.mm)),
         seedingAlgorithm=SeedingAlgorithm.TruthEstimated if truthSeeding else (SeedingAlgorithm.TruthSmeared if truthSmeared else SeedingAlgorithm.Default),
-        geoSelectionConfigFile="seed_config.json",
+        geoSelectionConfigFile="geomVTNA60p/seed_config.json",
         outputDirRoot=outputDir,
-        # logLevel=acts.logging.INFO,
     )
 
     addCKFTracks(
         s,
         trackingGeometry,
         field,
+        CkfConfig(
+            chi2CutOff=30000,
+            numMeasurementsCutOff=1,
+            maxSteps=None,
+        ),
         TrackSelectorConfig(
-            pt=(None, None),
+            pt=(100 * u.MeV, None),
             absEta=(None, None),
-            # loc0=(-4.0 * u.mm, 4.0 * u.mm),
             nMeasurementsMin=4,
         ),
-        #    TrackSelectorRanges(pt=(None, None), absEta=(None, None)),
-        #    TrackSelectorRanges(pt=(None, None), absEta=(None, None), removeNeutral=True),
         outputDirRoot=outputDir,
-        #    logLevel=acts.logging.DEBUG,
     )
-
     addAmbiguityResolution(
         s,
-        AmbiguityResolutionConfig(),
+        AmbiguityResolutionConfig(
+        maximumSharedHits=1,
+        nMeasurementsMin=4,
+        maximumIterations=1000,
+        ),
         outputDirRoot=outputDir,
     )
 
@@ -332,14 +407,24 @@ if "__main__" == __name__:
     options = getArgumentParser().parse_args()
 
     # "events_full_sim"#"fullchain_input"
-    inputDir = pathlib.Path.cwd() / "fullchain_input"
+    inputDir = pathlib.Path.cwd() / "events_40GeV"
     suffix = ""
     if options.truthSeeding:
-        suffix += "_truthSeeding"
-    if options.truthSmeared:
-        suffix += "_truthSmeared"
+        suffix += "_truthEstimated"
+    elif options.truthSmeared:
+        suffix += "_particleSmearing"
+    else:
+        suffix += "_standardSeeding"
     if options.truthVertexing:
         suffix += "_truthVertexing"
+    else:
+        suffix += "_iterativeVertexing"
+    if options.geant4:
+        suffix += "_geant4"
+    if options.gun > 0:
+        suffix += "_gun"+str(options.gun)
+    if options.dead:
+        suffix += "_deadZones"
     current_dir = pathlib.Path.cwd()
     outputDir = str(current_dir / ("output" + suffix))
 
@@ -359,15 +444,16 @@ if "__main__" == __name__:
         volumeLogLevel=customLogLevel(),
         mdecorator=matDeco,
     )
-    # Example usage:
-
-    # if i == 52 or i==53:
-    #    continue
-    # try:
+    print(outputDir if options.outdir == None else options.outdir)
     runCKFTracks(
+        detector,
         trackingGeometry,
         inputDir=inputDir,
-        outputDir=outputDir,
+        outputDir=outputDir if options.outdir == None else options.outdir,
+        useGeant4=options.geant4,
+        particleGun=options.gun,
+        applyDeadZones=options.dead,
+        applyFastSimSelections=options.fast,
         truthSeeding=options.truthSeeding,
         truthSmeared=options.truthSmeared,
         truthVertexing=options.truthVertexing,
@@ -382,5 +468,3 @@ if "__main__" == __name__:
         # DeltaRMax=options.sf_deltaRMax,
     ).run()
 
-    # except Exception as e:
-    #    print(f"Error: {e}")

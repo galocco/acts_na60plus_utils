@@ -27,6 +27,7 @@ import array
 import sys
 import argparse
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from typing import Optional, Union
 from pathlib import Path
@@ -39,15 +40,15 @@ def run_ckf(params, names, outDir):
         raise Exception("Length of Params must equal names")
 
     ckf_script = srcDir / "ml_chain_na60plus.py"
-    nevts = "-n 10"
+    nevts = "-n 1"
     #indir = "--indir=" + str(srcDir)
-    #outdir = "--output=" + str(outDir)
+    outdir = "--output=" + str(outDir)
 
     ret = ["python3"]
     ret.append(ckf_script)
     ret.append(nevts)
     #ret.append(indir)
-    #ret.append(outdir)
+    ret.append(outdir)
 
     i = 0
     for param in params:
@@ -60,16 +61,18 @@ def run_ckf(params, names, outDir):
 
 
 class Objective:
-    def __init__(self, k_dup, k_time):
+    def __init__(self, k_dup, k_time, k_d0):
         self.res = {
             "eff": [],
             "fakerate": [],
             "duplicaterate": [],
             "runtime": [],
+            "d0": [],
         }
 
         self.k_dup = k_dup
         self.k_time = k_time
+        self.k_d0 = k_d0
 
     def __call__(self, trial, ckf_perf=True):
         params = []
@@ -100,6 +103,7 @@ class Objective:
             self.res["fakerate"][-1]
             #+ self.res["duplicaterate"][-1] / self.k_dup
             #+ self.res["runtime"][-1] / self.k_time
+            #+ self.res["d0"][-1] / self.k_d0
         )
 
         return efficiency #- penalty
@@ -107,7 +111,7 @@ class Objective:
 
 def get_tracking_perf(self, ckf_perf, params, keys):
     if ckf_perf:
-        outDirName = "Output_CKF"
+        outDirName = "Optimization"
         outputfile = srcDir / outDirName / "performance_ckf.root"
         effContName = "particles"
         contName = "tracks"
@@ -122,6 +126,7 @@ def get_tracking_perf(self, ckf_perf, params, keys):
     run_ckf(params, keys, outputDir)
     rootFile = uproot.open(outputfile)
     self.res["eff"].append(rootFile["eff_" + effContName].member("fElements")[0])
+    
     self.res["fakerate"].append(rootFile["fakerate_" + contName].member("fElements")[0])
     self.res["duplicaterate"].append(
         rootFile["duplicaterate_" + contName].member("fElements")[0]
@@ -146,23 +151,40 @@ def get_tracking_perf(self, ckf_perf, params, keys):
         self.res["runtime"].append(time_ckf + time_seeding)
     else:
         self.res["runtime"].append(time_seeding)
+    outputfile = srcDir / outDirName / "performance_track_fitter_ckf.root"
+    rootFile = uproot.open(outputfile)
+    histogram = rootFile["res_d0"]
 
+    # Get bin edges and bin contents
+    bin_edges = histogram.edges
+    bin_contents = histogram.values
 
-def main():
-    k_dup = 5
-    k_time = 5
+        # Calculate the RMS
+    # Note: Exclude the underflow and overflow bins if needed
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    rms = np.sqrt(np.sum(bin_contents * (bin_centers**2)) / np.sum(bin_contents))
+
+    self.res["d0"].apend(rms)
+
+def main(k_dup = 5, k_time = 5):
 
     # Initializing the objective (score) function
     objective = Objective(k_dup, k_time)
 
-    
-    start_values = {
-        'maxSeedsPerSpM': 3,
-        'cotThetaMax': 5.809222379141632,
-        'sigmaScattering': 7.293572849910582,
-        'radLengthPerSeed': 0.07827007716884793,
-        'impactMax': 10.47494916604592
-    }
+    outputDir = Path("OptunaResults")
+    outputDir.mkdir(exist_ok=True)
+    # Open and read JSON file
+    try:
+        with open(outputDir / "results.json",'r') as file:
+            start_values = json.load(file)
+    except:
+        start_values = {
+            'maxSeedsPerSpM': 3,
+            'cotThetaMax': 5.809222379141632,
+            'sigmaScattering': 7.293572849910582,
+            'radLengthPerSeed': 0.07827007716884793,
+            'impactMax': 10.47494916604592
+        }
 
     
     # Optuna logger
@@ -179,19 +201,23 @@ def main():
 
     study.enqueue_trial(start_values)
     # Start Optimization
-    study.optimize(objective, n_trials=10)
+    study.optimize(objective, n_trials=1)
 
     # Printout the best trial values
     print("Best Trial until now", flush=True)
     for key, value in study.best_trial.params.items():
         print(f"    {key}: {value}", flush=True)
 
-    outputDir = Path("OptunaResults")
-    outputDir.mkdir(exist_ok=True)
-
     with open(outputDir / "results.json", "w") as fp:
         json.dump(study.best_params, fp)
 
+    fig = optuna.visualization.plot_param_importances(study)
+    fig.show()
+    #plt.savefig("param_importance.png")
+
+    fig = optuna.visualization.plot_optimization_history(study)
+    fig.show()
+    #plt.savefig("opt_history.png")
 
 if __name__ == "__main__":
     main()
