@@ -120,6 +120,24 @@ def getArgumentParser():
         help='Use particle truth to perform the vertexing',
         action='store_true'
     )
+
+    parser.add_argument(
+        '-c',
+        '--clustering',
+        help='Use clustering instead of smearing',
+        action='store_true'
+    )
+
+    # arguments for the seeding
+    parser.add_argument(
+        "--sh",
+        dest="shared",
+        help="Number of compatible seeds considered for middle seed",
+        type=int,
+        default=1,
+    )
+
+    # arguments for the seeding
     parser.add_argument(
         "--sf_maxSeedsPerSpM",
         dest="sf_maxSeedsPerSpM",
@@ -177,6 +195,55 @@ def getArgumentParser():
         default=60.0,
     )
 
+    parser.add_argument(
+        "--sf_numMeasurementsCutOff",
+        dest="sf_numMeasurementsCutOff",
+        help="maximum value for deltaR separation in mm",
+        type=int,
+        default=10.0,
+    )
+    
+    parser.add_argument(
+        "--sf_seedConfirmation",
+        dest="sf_seedConfirmation",
+        help="Use seed confirmation",
+        type=bool,
+        default=False,
+    )
+    #
+    parser.add_argument(
+        "--sf_dTopRMin",
+        dest="sf_dTopRMin",
+        help="Use seed confirmation",
+        type=float,
+        default=45,
+    )
+
+    parser.add_argument(
+        "--sf_dTopRMax",
+        dest="sf_dTopRMax",
+        help="Use seed confirmation",
+        type=float,
+        default=1000,
+    )
+
+    parser.add_argument(
+        "--sf_dBotRMin",
+        dest="sf_dBotRMin",
+        help="Use seed confirmation",
+        type=float,
+        default=50,
+    )
+
+    parser.add_argument(
+        "--sf_dBotRMax",
+        dest="sf_dBotRMax",
+        help="Use seed confirmation",
+        type=float,
+        default=1000,
+    )
+
+    
     return parser
 
 
@@ -185,24 +252,38 @@ def runCKFTracks(
     trackingGeometry,
     inputDir: Path,
     outputDir: Path,
+    jsonDigi="geomVTNA60p/digismear.json",
     useGeant4=False,
     truthSeeding=False,
     truthSmeared=False,
     truthVertexing=False,
     applyDeadZones=False,
     applyFastSimSelections=False,
+    applyReadout=False,
+    applyBackbone=False,
+    applyHole=True,
+    applyEndcapShort=False,
+    applyEndcapLong=False,
     particleGun=0,
+    MaxSharedHits=1,
     NumEvents=1,
     MaxSeedsPerSpM=3,
     CotThetaMax=5.809222379141632,
     SigmaScattering=7.293572849910582,
     RadLengthPerSeed=0.07827007716884793,
     ImpactMax=10.47494916604592,
-    MaxPtScattering=10.0
-    # DeltaRMin=1.0,
-    # DeltaRMax=60.0,
+    MaxPtScattering=10.0,
+    NumMeasurementsCutOff=1,
+    SeedConfirmation=False,
+    DTopRMin=45,
+    DTopRMax=1000,
+    DBotRMin=50,
+    DBotRMax=1000
 ):
 
+    print("truthSeeding: " ,truthSeeding)
+    print("truthSmeared: " ,truthSmeared)
+    print("truthVertexing: " ,truthVertexing)
     field = acts.ConstantBField(acts.Vector3(
         0.0, 1.5 * u.T, 0.0))  # ~dipole field
 
@@ -280,14 +361,19 @@ def runCKFTracks(
         s,
         trackingGeometry,
         field,
-        digiConfigFile="geomVTNA60p/digismear.json",
+        digiConfigFile=jsonDigi,
         outputDirRoot=outputDir,
         efficiency=0.99 if applyDeadZones or applyFastSimSelections else 1,
         applyDeadAreas=applyDeadZones,
         applyFastSimSelections=applyFastSimSelections,
+         applyReadout=applyReadout,
+        applyBackbone=applyBackbone,
+        applyHole=applyHole,
+        applyEndcapShort=applyEndcapShort,
+        applyEndcapLong=applyEndcapLong,
         rnd=rnd,
     )
-
+    
     # rotation of B field, so that B = Bz, needed for seeding
     field2 = acts.ConstantBField(acts.Vector3(
         0.0, 0.0, -1.5 * u.T))  # ~dipole field
@@ -297,7 +383,9 @@ def runCKFTracks(
         trackingGeometry,
         field2,
         TruthSeedRanges(pt=(100 * u.MeV, None),
-                        eta=(None, None), nHits=(4, None)),
+                        eta=(None, None),
+                        nHits=(4, None)),
+
         SeedFinderConfigArg(
             maxSeedsPerSpM=MaxSeedsPerSpM,
             cotThetaMax=CotThetaMax,
@@ -305,9 +393,9 @@ def runCKFTracks(
             radLengthPerSeed=RadLengthPerSeed,
             maxPtScattering=MaxPtScattering,
             # min and max R between Middle and Top SP
-            deltaRTopSP=(45 * u.mm, 100 * u.mm),
+            deltaRTopSP=(DTopRMin * u.mm, DTopRMax * u.mm),
             # min and max R between Middle and Bottom SP
-            deltaRBottomSP=(50 * u.mm, 100 * u.mm),
+            deltaRBottomSP=(DBotRMin * u.mm, DBotRMax * u.mm),
             impactMax=ImpactMax * u.mm,
             deltaZMax=50,  # was 5
             minPt=100 * u.MeV,
@@ -315,24 +403,26 @@ def runCKFTracks(
             useVariableMiddleSPRange=False,  # MODIFICATO 22/5/23
             # not useful if useVariableMiddleSPRange=False
             deltaRMiddleSPRange=(0 * u.mm, 0 * u.mm),
-            collisionRegion=(-0.5 * u.mm, 0.5 * u.mm),  # 0.5
+
+            collisionRegion=(-1 * u.mm, 1 * u.mm),  # 0.5
             # NOT USED??? seems to be used in Orthogonal seeding
             r=(0 * u.mm, 400 * u.mm),
-            rMiddle=(149 * u.mm, (250**2+150**2/2.)**(0.5) * u.mm),
+            #rMiddle=(149 * u.mm, (250**2+150**2/2.)**(0.5) * u.mm),
+            rMiddle=(0 * u.mm, 500 * u.mm),
             # deltaR=(0.01 * u.mm, 2.5 * u.mm),      #NOT USED???
             # z=(20 * u.mm, 80 * u.mm),      #NOT USED??? seems to be used in Orthogonal seeding
             # zOutermostLayers={74,76}, #modified by me in SeedfinderConfig.hpp
-            seedConfirmation=False,
+            seedConfirmation=SeedConfirmation,
             forwardSeedConfirmationRange=acts.SeedConfirmationRangeConfig(  # it should not be used....
-                zMinSeedConf=150 * u.mm,
-                zMaxSeedConf=0 * u.mm,
+                zMinSeedConf=-150 * u.mm,
+                zMaxSeedConf=150 * u.mm,
                 rMaxSeedConf=7 * u.mm,
                 nTopForLargeR=1,
                 nTopForSmallR=1,
             ),
             centralSeedConfirmationRange=acts.SeedConfirmationRangeConfig(  # it should not be used....
-                zMinSeedConf=7 * u.mm,
-                zMaxSeedConf=-7 * u.mm,
+                zMinSeedConf=-150 * u.mm,
+                zMaxSeedConf=150 * u.mm,
                 rMaxSeedConf=80 * u.mm,
                 nTopForLargeR=1,
                 nTopForSmallR=1,
@@ -343,22 +433,23 @@ def runCKFTracks(
             bFieldInZ=1.5 * u.T,
         ),  # why should I give the b field? to compute phi bins in SpacePointGrid.ipp
         SeedFilterConfigArg(  # not used, why?
-            seedConfirmation=False,
+            seedConfirmation=SeedConfirmation,
             maxSeedsPerSpMConf=5,
             maxQualitySeedsPerSpMConf=5,
             compatSeedLimit=2,  # added 4/10/23 (value not tuned)
         ),
+
         SpacePointGridConfigArg(
             rMax=400 * u.mm,
-            zBinEdges=[-160., -160., 160., 160.],
+            zBinEdges=[-160.,160.],
             # not used if bfieldZ is 0, otherwise it's used to compute number of phi bins
             impactMax=0.1 * u.mm,
             # not used if bfieldZ is 0, otherwise it's used to compute number of phi bins
             phiBinDeflectionCoverage=1,
         ),
         SeedingAlgorithmConfigArg(
-            zBinNeighborsTop=[[0, 1], [-1, 1], [-1, 0]],
-            zBinNeighborsBottom=[[0, 1], [-1, 1], [-1, 0]],
+            zBinNeighborsTop=[[0,0]],
+            zBinNeighborsBottom=[[0,0]],
             numPhiNeighbors=1,
         ),
         TruthEstimatedSeedingAlgorithmConfigArg(deltaR=(0 * u.mm, 100000 * u.mm)),
@@ -366,14 +457,13 @@ def runCKFTracks(
         geoSelectionConfigFile="geomVTNA60p/seed_config.json",
         outputDirRoot=outputDir,
     )
-
     addCKFTracks(
         s,
         trackingGeometry,
         field,
         CkfConfig(
-            chi2CutOff=30000,
-            numMeasurementsCutOff=1,
+            chi2CutOff=15,
+            numMeasurementsCutOff=int(NumMeasurementsCutOff),
             maxSteps=None,
         ),
         TrackSelectorConfig(
@@ -383,23 +473,24 @@ def runCKFTracks(
         ),
         outputDirRoot=outputDir,
     )
+
     addAmbiguityResolution(
         s,
         AmbiguityResolutionConfig(
-        maximumSharedHits=1,
+        maximumSharedHits=MaxSharedHits,
         nMeasurementsMin=4,
         maximumIterations=1000,
         ),
         outputDirRoot=outputDir,
     )
-
+    """
     addVertexFitting(
         s,
         field,
         vertexFinder=VertexFinder.Truth if truthVertexing else VertexFinder.Iterative,
         outputDirRoot=outputDir,
     )
-
+    """
     return s
 
 
@@ -425,6 +516,14 @@ if "__main__" == __name__:
         suffix += "_gun"+str(options.gun)
     if options.dead:
         suffix += "_deadZones"
+    if options.fast:
+        suffix += "_fastSim"
+    if options.clustering:
+        suffix += "_clustering"
+    if options.shared > 1:
+        suffix += "_shared"+str(options.shared)
+
+    MaxSharedHits=options.shared
     current_dir = pathlib.Path.cwd()
     outputDir = str(current_dir / ("output" + suffix))
 
@@ -432,24 +531,25 @@ if "__main__" == __name__:
         "geomVTNA60p/material-map_VTNA60p.json")
     jsonFile = "geomVTNA60p/tgeo-config_VTNA60p.json"
     tgeo_fileName = "geomVTNA60p/geom_VTNA60p.root"
+    jsonDigi = "geomVTNA60p/digicluster.json" if options.clustering else "geomVTNA60p/digismear.json"
 
     logLevel = acts.logging.INFO
     customLogLevel = acts.examples.defaultLogging(logLevel=logLevel)
 
     detector, trackingGeometry, decorators = TGeoDetector.create(jsonFile=str(jsonFile),
-                                                                 fileName=str(
-        tgeo_fileName),
-        surfaceLogLevel=customLogLevel(),
-        layerLogLevel=customLogLevel(),
-        volumeLogLevel=customLogLevel(),
-        mdecorator=matDeco,
-    )
+                                                                 fileName=str(tgeo_fileName),
+                                                                 surfaceLogLevel=customLogLevel(),
+                                                                 layerLogLevel=customLogLevel(),
+                                                                 volumeLogLevel=customLogLevel(),
+                                                                 mdecorator=matDeco,
+                                                                )
     print(outputDir if options.outdir == None else options.outdir)
     runCKFTracks(
         detector,
         trackingGeometry,
         inputDir=inputDir,
         outputDir=outputDir if options.outdir == None else options.outdir,
+        jsonDigi=jsonDigi,
         useGeant4=options.geant4,
         particleGun=options.gun,
         applyDeadZones=options.dead,
@@ -463,6 +563,14 @@ if "__main__" == __name__:
         SigmaScattering=options.sf_sigmaScattering,
         RadLengthPerSeed=options.sf_radLengthPerSeed,
         ImpactMax=options.sf_impactMax,
+        NumMeasurementsCutOff=options.sf_numMeasurementsCutOff,
+        SeedConfirmation=options.sf_seedConfirmation,
+        DTopRMin=options.sf_dTopRMin,
+        DTopRMax=options.sf_dTopRMax,
+        DBotRMin=options.sf_dBotRMin,
+        DBotRMax=options.sf_dBotRMax,
+        MaxSharedHits=MaxSharedHits
+        
         # MaxPtScattering=options.sf_maxPtScattering,
         # DeltaRMin=options.sf_deltaRMin,
         # DeltaRMax=options.sf_deltaRMax,
